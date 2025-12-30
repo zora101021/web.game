@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>❄️🔥 ADOFAI Web Ultimate</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<style>
+html,body{
+  margin:0;
+  background:#000;
+  color:#fff;
+  font-family:Segoe UI,Arial;
+  overflow:hidden;
+}
+#ui{
+  position:fixed;
+  left:10px;top:10px;
+  width:260px;
+  background:rgba(0,0,0,.7);
+  padding:10px;
+  border-radius:10px;
+}
+button,input{
+  width:100%;
+  margin:4px 0;
+  background:#111;
+  color:#fff;
+  border:1px solid #333;
+  padding:6px;
+}
+canvas{display:block}
+#rank{
+  font-size:12px;
+  max-height:120px;
+  overflow:auto;
+}
+</style>
+</head>
+
+<body>
+
+<div id="ui">
+  <b>❄️🔥 ADOFAI Web</b>
+  <input id="name" placeholder="玩家暱稱">
+  <input type="file" id="file" accept="audio/*">
+  <button onclick="loadMusic()">🎵 載入音樂</button>
+  <button onclick="autoBeat()">🎼 自動譜面</button>
+  <button onclick="start()">▶️ Play</button>
+  <div>分數：<span id="score">0</span></div>
+  <div id="rank"></div>
+</div>
+
+<canvas id="game"></canvas>
+<audio id="audio"></audio>
+
+<script>
+/* ===== Firebase ===== */
+const firebaseConfig={
+  apiKey:"YOUR_KEY",
+  authDomain:"YOUR_DOMAIN",
+  projectId:"YOUR_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const db=firebase.firestore();
+
+/* ===== Canvas ===== */
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+resize();
+window.onresize=resize;
+function resize(){
+  canvas.width=innerWidth;
+  canvas.height=innerHeight;
+}
+const C=()=>({x:canvas.width/2,y:canvas.height/2});
+const R=200;
+
+/* ===== Audio ===== */
+const audio=document.getElementById("audio");
+const AC=new AudioContext();
+let analyser,source,freq=new Uint8Array(1024);
+
+/* ===== Game ===== */
+let angle=-Math.PI/2;
+let speed=Math.PI/90;
+let tiles=[];
+let index=0;
+let running=false;
+let score=0;
+
+/* ===== Load ===== */
+function loadMusic(){
+  const f=file.files[0];
+  audio.src=URL.createObjectURL(f);
+  source=AC.createMediaElementSource(audio);
+  analyser=AC.createAnalyser();
+  analyser.fftSize=2048;
+  source.connect(analyser);
+  analyser.connect(AC.destination);
+}
+
+/* ===== Auto Beat ===== */
+function autoBeat(){
+  tiles=[];
+  let hist=[],last=0;
+  audio.currentTime=0;
+  audio.play();
+  const loop=()=>{
+    analyser.getByteFrequencyData(freq);
+    let low=0,mid=0;
+    for(let i=0;i<30;i++)low+=freq[i];
+    for(let i=30;i<120;i++)mid+=freq[i];
+    let energy=low*1.2+mid*0.8;
+    hist.push(energy);
+    if(hist.length>40)hist.shift();
+    let avg=hist.reduce((a,b)=>a+b,0)/hist.length;
+    if(energy>avg*1.4 && audio.currentTime-last>0.3){
+      tiles.push({});
+      last=audio.currentTime;
+    }
+    if(audio.currentTime<audio.duration)requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+/* ===== Play ===== */
+function start(){
+  score=0;
+  index=0;
+  angle=-Math.PI/2;
+  running=true;
+  audio.currentTime=0;
+  audio.play();
+  gameLoop();
+}
+
+/* ===== Loop ===== */
+function gameLoop(){
+  if(!running)return;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawFloor();
+  drawJudge();
+  drawBall(angle,"#0cf");
+  drawBall(angle+Math.PI,"#f44");
+  angle+=speed;
+  requestAnimationFrame(gameLoop);
+}
+
+/* ===== Draw ===== */
+function drawFloor(){
+  const c=C();
+  ctx.save();
+  ctx.translate(c.x,c.y);
+  ctx.strokeStyle="#222";
+  ctx.lineWidth=16;
+  ctx.shadowBlur=30;
+  ctx.shadowColor="#0cf";
+  ctx.beginPath();
+  ctx.arc(0,0,R,0,Math.PI*2);
+  ctx.stroke();
+  ctx.restore();
+}
+function drawJudge(){
+  const c=C();
+  ctx.fillStyle="#fff";
+  ctx.beginPath();
+  ctx.arc(c.x,c.y-R,6,0,Math.PI*2);
+  ctx.fill();
+}
+function drawBall(a,col){
+  const c=C();
+  ctx.fillStyle=col;
+  ctx.shadowBlur=20;
+  ctx.shadowColor=col;
+  ctx.beginPath();
+  ctx.arc(c.x+Math.cos(a)*R,c.y+Math.sin(a)*R,8,0,Math.PI*2);
+  ctx.fill();
+}
+
+/* ===== Hit ===== */
+function hit(){
+  if(!running)return;
+  let diff=Math.abs((angle%(Math.PI*2))+Math.PI/2);
+  if(diff<0.25){
+    score++;
+    scoreEl.textContent=score;
+    index++;
+    if(index>=tiles.length){
+      running=false;
+      saveScore();
+    }
+  }else{
+    running=false;
+  }
+}
+document.onclick=hit;
+document.onkeydown=e=>e.code==="Space"&&hit();
+
+/* ===== Rank ===== */
+const rankDiv=document.getElementById("rank");
+function saveScore(){
+  db.collection("scores").add({
+    name:name.value||"Player",
+    score, time:Date.now()
+  });
+  loadRank();
+}
+function loadRank(){
+  db.collection("scores")
+    .orderBy("score","desc")
+    .limit(10)
+    .onSnapshot(s=>{
+      rankDiv.innerHTML="<b>🏆 排行榜</b><br>";
+      s.forEach(d=>{
+        rankDiv.innerHTML+=`${d.data().name} : ${d.data().score}<br>`;
+      });
+    });
+}
+loadRank();
+</script>
+</body>
+</html>
